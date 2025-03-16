@@ -88,8 +88,8 @@ acl_rule_attr_lookup_t aclMatchLookup =
     { MATCH_BTH_OPCODE,        SAI_ACL_ENTRY_ATTR_FIELD_BTH_OPCODE},
     { MATCH_AETH_SYNDROME,     SAI_ACL_ENTRY_ATTR_FIELD_AETH_SYNDROME},
     { MATCH_TUNNEL_TERM,       SAI_ACL_ENTRY_ATTR_FIELD_TUNNEL_TERMINATED},
-    { MATCH_METADATA,          SAI_ACL_ENTRY_ATTR_FIELD_ACL_USER_META}
-};
+    { MATCH_METADATA,          SAI_ACL_ENTRY_ATTR_FIELD_ACL_USER_META},
+    { MATCH_INNER_SRC_IP,      SAI_ACL_ENTRY_ATTR_FIELD_INNER_SRC_IP},
 
 static acl_range_type_lookup_t aclRangeTypeLookup =
 {
@@ -108,6 +108,7 @@ static acl_rule_attr_lookup_t aclL3ActionLookup =
     { ACTION_PACKET_ACTION,                    SAI_ACL_ENTRY_ATTR_ACTION_PACKET_ACTION },
     { ACTION_REDIRECT_ACTION,                  SAI_ACL_ENTRY_ATTR_ACTION_REDIRECT },
     { ACTION_DO_NOT_NAT_ACTION,                SAI_ACL_ENTRY_ATTR_ACTION_NO_NAT },
+    { ACTION_INNER_SRC_MAC_REWRITE_ACTION,     SAI_ACL_ENTRY_ATTR_ACTION_SET_INNER_SRC_MAC},
 };
 
 static acl_rule_attr_lookup_t aclMirrorStageLookup =
@@ -177,7 +178,8 @@ static const acl_capabilities_t defaultAclActionsSupported =
         AclActionCapabilities
         {
             {
-                SAI_ACL_ACTION_TYPE_PACKET_ACTION
+                SAI_ACL_ACTION_TYPE_PACKET_ACTION,
+                SAI_ACL_ACTION_TYPE_SET_INNER_SRC_MAC
             },
             false
         }
@@ -201,7 +203,8 @@ static acl_table_action_list_lookup_t defaultAclActionList =
                 ACL_STAGE_EGRESS,
                 {
                     SAI_ACL_ACTION_TYPE_PACKET_ACTION,
-                    SAI_ACL_ACTION_TYPE_REDIRECT
+                    SAI_ACL_ACTION_TYPE_REDIRECT,
+                    SAI_ACL_ACTION_TYPE_SET_INNER_SRC_MAC
                 }
             }
         }
@@ -1060,7 +1063,7 @@ bool AclRule::validateAddMatch(string attr_name, string attr_value)
             matchData.data.u8 = to_uint<uint8_t>(attr_value);
             matchData.mask.u8 = 0xFF;
         }
-        else if (attr_name == MATCH_SRC_IP || attr_name == MATCH_DST_IP)
+        else if (attr_name == MATCH_SRC_IP || attr_name == MATCH_DST_IP || attr_name == MATCH_INNER_SRC_IP)
         {
             IpPrefix ip(attr_value);
 
@@ -2131,6 +2134,80 @@ bool AclRulePacket::validate()
 void AclRulePacket::onUpdate(SubjectType, void *)
 {
     // Do nothing
+}
+
+AclRuleInnerSrcMacRewrite::AclRuleInnerSrcMacRewrite(AclOrch *aclOrch, string rule, string table, bool createCounter) :
+        AclRule(aclOrch, rule, table, createCounter)
+{
+}
+
+bool AclRuleInnerSrcMacRewrite::validateAddAction(string attr_name, string _attr_value)
+{
+    SWSS_LOG_ENTER();
+
+    sai_acl_action_data_t actionData;
+
+    auto action_str = attr_name;
+
+    if (attr_name == ACTION_INNER_SRC_MAC_REWRITE_ACTION)
+    {
+        memcpy(actionData.parameter.mac , attr_val.getMac(), sizeof(sai_mac_t));
+        action_str = ACTION_INNER_SRC_MAC_REWRITE_ACTION;
+    }
+    else
+    {
+        return false;
+    }
+
+    return setAction(aclL3ActionLookup[action_str], actionData);
+}
+
+bool AclRuleInnerSrcMacRewrite::validate()
+{
+    SWSS_LOG_ENTER();
+
+    if ((m_rangeConfig.empty() && m_matches.empty()) || m_actions.size() != 1)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+void AclRuleInnerSrcMacRewrite::onUpdate(SubjectType, void *)
+{
+    auto innersrcmacrewriterule = dynamic_cast<const AclRuleInnerSrcMacRewrite*>(&rule);
+    if (!AclRuleInnerSrcMacRewrite)
+    {
+        SWSS_LOG_ERROR("Cannot update inner src mac rewritee rule with a rule of a different type");
+        return false;
+    }
+
+    if (type != SUBJECT_TYPE_INNER_SRC_IP_CHANGE || type != SUBJECT_TYPE_VNI_CHANGE || type != SUBJECT_TYPE_MAC_ADDRESS_CHANGE)
+    {
+        return;
+    }
+
+    MirrorSessionUpdate *update = static_cast<MirrorSessionUpdate *>(cntx);
+
+    if (m_sessionName != update->name)
+    {
+        return;
+    }
+
+    if (update->active)
+    {
+        SWSS_LOG_INFO("Activating mirroring ACL %s for session %s", m_id.c_str(), m_sessionName.c_str());
+        // During mirror session activation, the newly created counter needs to be registered to the FC.
+        if(activate() && hasCounter())
+        {
+            m_pAclOrch->registerFlexCounter(*this);
+        }
+    }
+    else
+    {
+        SWSS_LOG_INFO("Deactivating mirroring ACL %s for session %s", m_id.c_str(), m_sessionName.c_str());
+    }
 }
 
 AclRuleMirror::AclRuleMirror(AclOrch *aclOrch, MirrorOrch *mirror, string rule, string table) :

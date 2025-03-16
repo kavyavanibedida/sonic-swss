@@ -57,6 +57,7 @@
 #define MATCH_AETH_SYNDROME     "AETH_SYNDROME"
 #define MATCH_TUNNEL_TERM       "TUNNEL_TERM"
 #define MATCH_METADATA          "META_DATA"
+#define MATCH_INNER_SRC_IP      "INNER_SRC_IP"
 
 #define BIND_POINT_TYPE_PORT "PORT"
 #define BIND_POINT_TYPE_PORTCHANNEL "PORTCHANNEL"
@@ -76,6 +77,7 @@
 #define ACTION_COUNTER                      "COUNTER"
 #define ACTION_META_DATA                    "META_DATA_ACTION"
 #define ACTION_DSCP                         "DSCP_ACTION"
+#define ACTION_INNER_SRC_MAC_REWRITE_ACTION "INNER_SRC_MAC_REWRITE_ACTION"
 
 #define PACKET_ACTION_FORWARD     "FORWARD"
 #define PACKET_ACTION_DROP        "DROP"
@@ -398,6 +400,16 @@ public:
 
 protected:
     sai_object_id_t getRedirectObjectId(const string& redirect_param);
+};
+
+class AclRuleInnerSrcMacRewrite: public AclRule
+{
+public:
+    AclRuleInnerSrcMacRewrite(AclOrch *m_pAclOrch, string rule, string table, bool createCounter = true);
+
+    bool validateAddAction(string attr_name, string attr_value);
+    bool validate();
+    void onUpdate(SubjectType, void *) override;
 };
 
 class AclRuleMirror: public AclRule
